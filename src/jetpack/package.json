@@ -1,9 +1,9 @@
 {
-  "name": "jetpack",
-  "fullName": "jetpack",
+  "name": "remotestorage",
+  "fullName": "remotestorage",
   "id": "jid1-IZq2EQfMf4oB0w",
-  "description": "a basic add-on",
-  "author": "",
-  "license": "MPL 2.0",
+  "description": "per-user data storage for the web",
+  "author": "http://remotestorage.io/",
+  "license": "AGPL or MIT",
   "version": "0.1"
 }
