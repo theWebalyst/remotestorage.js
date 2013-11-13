@@ -12,6 +12,12 @@ var widget = widgets.Widget({
       contentScriptFile: self.data.url('in-page.js') 
     });
     ss.storage.color = 'red';
+    worker.port.on('setItem', function(key, val) {
+      ss.storage[key] = val;
+    });
+    worker.port.on('getItem', function(key, cb) {
+      worker.port.emit('callback', cb, ss.storage[key]);
+    });
     worker.port.emit('drawBorder', ss.storage.color);
   }
 });
