@@ -39,14 +39,15 @@
    * be undefined at times (especially for caching-roots).
    */
 
-  var haveLocalStorage;
+  var hasLocalStorage;
   var SETTINGS_KEY = "remotestorage:wireclient";
 
-  var API_2012 = 1, API_00 = 2, API_01 = 3, API_HEAD = 4;
+  var API_2012 = 1, API_00 = 2, API_01 = 3, API_02 = 4, API_HEAD = 5;
 
   var STORAGE_APIS = {
     'draft-dejong-remotestorage-00': API_00,
     'draft-dejong-remotestorage-01': API_01,
+    'draft-dejong-remotestorage-02': API_02,
     'https://www.w3.org/community/rww/wiki/read-write-web-00#simple': API_2012
   };
 
@@ -75,6 +76,7 @@
     }
 
     var promise = promising();
+    var revision;
 
     headers['Authorization'] = 'Bearer ' + token;
 
@@ -85,22 +87,31 @@
       if (error) {
         promise.reject(error);
       } else {
-        if (response.status === 404) {
-          promise.fulfill(404);
+        if ([401, 403, 404, 412].indexOf(response.status) >= 0) {
+          promise.fulfill(response.status);
+        } else if ([201, 204, 304].indexOf(response.status) >= 0 ||
+                   (response.status === 200 && method !== 'GET')) {
+          revision = response.getResponseHeader('ETag');
+          promise.fulfill(response.status, undefined, undefined, revision);
         } else {
           var mimeType = response.getResponseHeader('Content-Type');
           var body;
-          var revision = getEtag ? response.getResponseHeader('ETag') : (response.status === 200 ? fakeRevision : undefined);
-          if ((! mimeType) || mimeType.match(/charset=binary/)) {
-            var blob = new Blob([response.response], {type: mimeType});
-            var reader = new FileReader();
-            reader.addEventListener("loadend", function() {
-              // reader.result contains the contents of blob as a typed array
-              promise.fulfill(response.status, reader.result, mimeType, revision);
-            });
-            reader.readAsArrayBuffer(blob);
+          if (getEtag) {
+            revision = response.getResponseHeader('ETag');
           } else {
-            body = mimeType && mimeType.match(/^application\/json/) ? JSON.parse(response.responseText) : response.responseText;
+            revision = response.status === 200 ? fakeRevision : undefined;
+          }
+
+          if ((! mimeType) || mimeType.match(/charset=binary/)) {
+            RS.WireClient.readBinaryData(response.response, mimeType, function(result) {
+              promise.fulfill(response.status, result, mimeType, revision);
+            });
+          } else {
+            if (mimeType && mimeType.match(/^application\/json/)) {
+              body = JSON.parse(response.responseText);
+            } else {
+              body = response.responseText;
+            }
             promise.fulfill(response.status, body, mimeType, revision);
           }
         }
@@ -109,9 +120,26 @@
     return promise;
   }
 
+  function readBinaryData(content, mimeType, callback) {
+    var blob = new Blob([content], { type: mimeType });
+    var reader = new FileReader();
+    reader.addEventListener("loadend", function() {
+      callback(reader.result); // reader.result contains the contents of blob as a typed array
+    });
+    reader.readAsArrayBuffer(blob);
+  }
+
   function cleanPath(path) {
     return path.replace(/\/+/g, '/').split('/').map(encodeURIComponent).join('/');
   }
+
+  function isFolderDescription(body) {
+    return ((Object.keys(body).length === 2)
+                && (body['@context'] === 'http://remotestorage.io/spec/folder-description')
+                && (typeof(body['items']) === 'object'));
+  }
+
+  var onErrorCb;
 
   /**
    * Class : RemoteStorage.WireClient
@@ -127,12 +155,14 @@
      *   in posession of a token and a href
      **/
     RS.eventHandling(this, 'change', 'connected');
-    rs.on('error', function(error){
-      if (error instanceof RemoteStorage.Unauthorized) {
+
+    onErrorCb = function(error){
+      if(error instanceof RemoteStorage.Unauthorized) {
         this.configure(undefined, undefined, undefined, null);
       }
-    }.bind(this));
-    if (haveLocalStorage) {
+    }.bind(this);
+    rs.on('error', onErrorCb);
+    if (hasLocalStorage) {
       var settings;
       try { settings = JSON.parse(localStorage[SETTINGS_KEY]); } catch(e) {}
       if (settings) {
@@ -211,7 +241,7 @@
       } else {
         this.connected = false;
       }
-      if (haveLocalStorage) {
+      if (hasLocalStorage) {
         localStorage[SETTINGS_KEY] = JSON.stringify({
           userAddress: this.userAddress,
           href: this.href,
@@ -253,11 +283,19 @@
         return promise;
       } else {
         return promise.then(function(status, body, contentType, revision) {
+          var tmp;
           if (status === 200 && typeof(body) === 'object') {
             if (Object.keys(body).length === 0) {
               // no children (coerce response to 'not found')
               status = 404;
-            } else {
+            } else if(isFolderDescription(body)) {
+              tmp = {};
+              for(var item in body.items) {
+                this._revisionCache[path + item] = body.items[item].ETag;
+                tmp[item] = body.items[item].ETag;
+              }
+              body = tmp;
+            } else {//pre-02 server
               for(var key in body) {
                 this._revisionCache[path + key] = body[key];
               }
@@ -312,6 +350,8 @@
   // Shared isArrayBufferView used by WireClient and Dropbox
   RS.WireClient.isArrayBufferView = isArrayBufferView;
 
+  RS.WireClient.readBinaryData = readBinaryData;
+
   // Shared request function used by WireClient, GoogleDrive and Dropbox.
   RS.WireClient.request = function(method, url, options, callback) {
     RemoteStorage.log(method, url);
@@ -365,21 +405,31 @@
     xhr.send(body);
   };
 
+  Object.defineProperty(RemoteStorage.WireClient.prototype, 'storageType', {
+    get: function() {
+      if (this.storageApi) {
+        var spec = this.storageApi.match(/draft-dejong-(remotestorage-\d\d)/);
+        return spec ? spec[1] : '2012.04';
+      }
+    }
+  });
+
   RS.WireClient.configureHooks = [];
 
   RS.WireClient._rs_init = function(remoteStorage) {
+    hasLocalStorage = remoteStorage.localStorageAvailable();
     remoteStorage.remote = new RS.WireClient(remoteStorage);
   };
 
   RS.WireClient._rs_supported = function() {
-    haveLocalStorage = 'localStorage' in global;
     return !! global.XMLHttpRequest;
   };
 
-  RS.WireClient._rs_cleanup = function(){
-    if (haveLocalStorage){
+  RS.WireClient._rs_cleanup = function(remoteStorage){
+    if (hasLocalStorage){
       delete localStorage[SETTINGS_KEY];
     }
+    remoteStorage.removeEventListener('error', onErrorCb);
   };
 
 })(typeof(window) !== 'undefined' ? window : global);

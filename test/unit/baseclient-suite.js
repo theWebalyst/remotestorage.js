@@ -25,7 +25,7 @@ define(['requirejs'], function(requirejs, undefined) {
           }
         }
       };
-      
+
       require('./src/eventhandling');
       if (global.rs_eventhandling) {
         RemoteStorage.eventHandling = global.rs_eventhandling;
@@ -36,7 +36,7 @@ define(['requirejs'], function(requirejs, undefined) {
       if(global.rs_wireclient) {
         RemoteStorage.WireClient = global.rs_wireclient;
       } else {
-        global.rs_wireclient = RemoteStorage.WireClient
+        global.rs_wireclient = RemoteStorage.WireClient;
       }
 
       require('./lib/Math.uuid');
@@ -49,6 +49,7 @@ define(['requirejs'], function(requirejs, undefined) {
       }
       test.done();
     },
+
     tests: [
       {
         desc: "it takes a storage object and base path",
@@ -65,7 +66,8 @@ define(['requirejs'], function(requirejs, undefined) {
         desc: "it doesn't accept non-directory paths",
         run: function(env, test) {
           try {
-            new RemoteStorage.BaseClient(new RemoteStorage(), '/foo');
+            var storage = new RemoteStorage();
+            var client = new RemoteStorage.BaseClient(storage, '/foo');
             test.result(false);
           } catch(e) {
             test.done();
@@ -88,7 +90,7 @@ define(['requirejs'], function(requirejs, undefined) {
       },
 
       {
-        desc: "it installs a change handler for it's base",
+        desc: "it installs a change handler for its base",
         run: function(env, test) {
           var storage = new RemoteStorage();
           storage.onChange = function(path, handler) {
@@ -96,7 +98,7 @@ define(['requirejs'], function(requirejs, undefined) {
             test.assertAnd(path, '/foo/');
             test.done();
           };
-          new RemoteStorage.BaseClient(storage, '/foo/');
+          var client = new RemoteStorage.BaseClient(storage, '/foo/');
         }
       },
 
@@ -182,13 +184,39 @@ define(['requirejs'], function(requirejs, undefined) {
       },
 
       {
-        desc: "#getListing results in an array of keys, when it receives an object",
+        desc: "#getListing results in an object, when it receives a directory listing object (< 02 spec)",
         run: function(env, test) {
           env.storage.get = function(path) {
             return promising().fulfill(200, { foo: 'bar', 'baz/': 'bla' });
           };
           env.client.getListing('').then(function(result) {
-            test.assert(result, ['foo', 'baz/']);
+            test.assert(result, { 'foo': {"ETag":'bar'}, 'baz/': {"ETag":'bla'} });
+          });
+        }
+      },
+
+      {
+        desc: "#getListing results in an object, when it receives a directory listing object (>= 02 spec)",
+        run: function(env, test) {
+          var response_object = {
+            "@context": "http://remotestorage.io/spec/folder-description",
+            "items": {
+              "abc.jpg": {
+                "ETag": "DEADBEEFDEADBEEFDEADBEEF",
+                "Content-Type": "image/jpeg",
+                "Content-Length": 82352
+              },
+              "thumbnails/": {
+                "ETag": "1337ABCD1337ABCD1337ABCD"
+              }
+            }
+          };
+          env.storage.get = function(path) {
+            return promising().fulfill(200, response_object);
+          };
+          env.client.getListing('').then(function(result) {
+            test.assertAnd(result, response_object.items, JSON.stringify(result));
+            test.done();
           });
         }
       },

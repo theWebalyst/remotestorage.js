@@ -1,5 +1,5 @@
 if (typeof define !== 'function') {
-    var define = require('amdefine')(module);
+  var define = require('amdefine')(module);
 }
 define(['requirejs'], function(requirejs, undefined) {
   var suites = [];
@@ -11,6 +11,7 @@ define(['requirejs'], function(requirejs, undefined) {
       global.RemoteStorage = function() {};
       RemoteStorage.log = function() {};
       global.RemoteStorage.Unauthorized = function() {};
+      global.RemoteStorage.prototype.localStorageAvailable = function() { return false; };
       require('./lib/promising');
       require('./src/eventhandling');
 
@@ -23,7 +24,7 @@ define(['requirejs'], function(requirejs, undefined) {
       if(global.rs_wireclient) {
         RemoteStorage.WireClient = global.rs_wireclient;
       } else {
-        global.rs_wireclient = RemoteStorage.WireClient
+        global.rs_wireclient = RemoteStorage.WireClient;
       }
       test.done();
     },
@@ -176,6 +177,28 @@ define(['requirejs'], function(requirejs, undefined) {
       },
 
       {
+        desc: "#storageType returns a simplified identifier for the current storage API",
+        run: function(env, test) {
+          env.client.storageApi = undefined;
+          test.assertTypeAnd(env.client.storageType, 'undefined');
+
+          env.client.storageApi = 'draft-dejong-remotestorage-00';
+          test.assertAnd(env.client.storageType, 'remotestorage-00');
+
+          env.client.storageApi = 'draft-dejong-remotestorage-01';
+          test.assertAnd(env.client.storageType, 'remotestorage-01');
+
+          env.client.storageApi = 'draft-dejong-remotestorage-02';
+          test.assertAnd(env.client.storageType, 'remotestorage-02');
+
+          env.client.storageApi = 'https://www.w3.org/community/rww/wiki/read-write-web-00#simple';
+          test.assertAnd(env.client.storageType, '2012.04');
+
+          test.done();
+        }
+      },
+
+      {
         desc: "#get opens a CORS request",
         run: function(env, test) {
           env.connectedClient.get('/foo/bar');
@@ -288,7 +311,7 @@ define(['requirejs'], function(requirejs, undefined) {
       },
 
       {
-        desc: "#get extracts the Content-Type header, status and responseText and fulfills it's promise with those, once onload is called",
+        desc: "#get extracts the Content-Type header, status and responseText and fulfills its promise with those, once onload is called",
         run: function(env, test) {
           env.connectedClient.get('/foo/bar').
             then(function(status, body, contentType) {
@@ -317,6 +340,55 @@ define(['requirejs'], function(requirejs, undefined) {
           req._responseHeaders['Content-Type'] = 'application/json; charset=UTF-8';
           req.status = 200;
           req.responseText = '{"response":"body"}';
+          req._onload();
+        }
+      },
+
+      {
+        desc: "#get unpacks pre-02 directory listings",
+        run: function(env, test) {
+          env.connectedClient.get('/foo/01/').
+            then(function(status, body, contentType) {
+              test.assertAnd(status, 200);
+              test.assertAnd(body, { a: 'qwer', 'b/': 'asdf' });
+              test.assert(contentType, 'application/json; charset=UTF-8');
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req._responseHeaders['Content-Type'] = 'application/json; charset=UTF-8';
+          req.status = 200;
+          req.responseText = '{"a":"qwer","b/":"asdf"}';
+          req._onload();
+        }
+      },
+
+
+      {
+        desc: "#get unpacks -02 directory listings",
+        run: function(env, test) {
+          env.connectedClient.get('/foo/01/').
+            then(function(status, body, contentType) {
+              test.assertAnd(status, 200);
+              test.assertAnd(body, { a: 'qwer', 'b/': 'asdf' });
+              test.assert(contentType, 'application/json; charset=UTF-8');
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req._responseHeaders['Content-Type'] = 'application/json; charset=UTF-8';
+          req.status = 200;
+          req.responseText = JSON.stringify({
+            "@context": "http://remotestorage.io/spec/folder-description",
+            items: {
+              a: {
+                "ETag": "qwer",
+                "Content-Length": 5,
+                "Content-Type": "text/html"
+              },
+              "b/": {
+                "ETag": "asdf",
+                "Content-Type":"application/json",
+                "Content-Length": 137
+              }
+            }
+          });
           req._onload();
         }
       },
@@ -430,7 +502,7 @@ define(['requirejs'], function(requirejs, undefined) {
 
       {
         desc: "requests are aborted if they aren't responded after REQUEST_TIMEOUT milliseconds",
-        timeout: 30010,
+        timeout: 3000,
         run: function(env, test) {
           RemoteStorage.WireClient.REQUEST_TIMEOUT = 1000;
           env.connectedClient.get('/foo').then(function() {
@@ -488,15 +560,151 @@ define(['requirejs'], function(requirejs, undefined) {
             then(function(status, body, contentType) {
               test.assertAnd(status, 404);
               test.assertTypeAnd(body, 'undefined');
+              test.assertTypeAnd(contentType, 'undefined');
               test.done();
             });
           var req = XMLHttpRequest.instances.shift();
           req.status = 404;
-          req.response = 'response-body';
+          req.response = '';
           req._onload();
         }
-      }
+      },
 
+      {
+        desc: "412 responses discard the body altogether",
+        run: function(env, test) {
+          env.connectedClient.get('/foo/bar').
+            then(function(status, body, contentType) {
+              test.assertAnd(status, 412);
+              test.assertTypeAnd(body, 'undefined');
+              test.assertTypeAnd(contentType, 'undefined');
+              test.done();
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req.status = 412;
+          req.response = '';
+          req._onload();
+        }
+      },
+
+      {
+        desc: "304 responses discard body and content-type, but return the revision",
+        run: function(env, test) {
+          env.connectedClient.get('/foo/bar', { ifNoneMatch: 'foo' }).
+            then(function(status, body, contentType, revision) {
+              test.assertAnd(status, 304);
+              test.assertTypeAnd(body, 'undefined');
+              test.assertTypeAnd(contentType, 'undefined');
+              test.assertAnd(revision, '"foo"', 'expected revision to be "foo" but was' + revision);
+              test.done();
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req._responseHeaders['ETag'] = '"foo"';
+          req.status = 304;
+          req.response = '';
+          req._onload();
+        }
+      },
+
+      {
+        desc: "204 responses on delete discard body and content-type, but return the revision",
+        run: function(env, test) {
+          env.connectedClient.delete('/foo/bar', { ifMatch: 'foo' }).
+            then(function(status, body, contentType, revision) {
+              test.assertAnd(status, 204);
+              test.assertTypeAnd(body, 'undefined');
+              test.assertTypeAnd(contentType, 'undefined');
+              test.assertAnd(revision, '"foo"', 'expected revision to be "foo" but was' + revision);
+              test.done();
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req._responseHeaders['ETag'] = '"foo"';
+          req.status = 204;
+          req.response = '';
+          req._onload();
+        }
+      },
+
+      {
+        desc: "200 responses on delete discard body and content-type, but return the revision",
+        run: function(env, test) {
+          env.connectedClient.delete('/foo/bar', { ifMatch: 'foo' }).
+            then(function(status, body, contentType, revision) {
+              test.assertAnd(status, 200);
+              test.assertTypeAnd(body, 'undefined');
+              test.assertTypeAnd(contentType, 'undefined');
+              test.assertAnd(revision, '"foo"', 'expected revision to be "foo" but was' + revision);
+              test.done();
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req._responseHeaders['ETag'] = '"foo"';
+          req.status = 200;
+          req.response = '';
+          req._onload();
+        }
+      },
+
+      {
+        desc: "200 responses on delete discard revision when no ETag is sent",
+        run: function(env, test) {
+          env.connectedClient.delete('/foo/bar', { ifMatch: 'foo' }).
+            then(function(status, body, contentType, revision) {
+              test.assertAnd(status, 200);
+              test.assertTypeAnd(body, 'undefined');
+              test.assertTypeAnd(contentType, 'undefined');
+              test.assertTypeAnd(revision, 'undefined');
+              test.done();
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req.status = 200;
+          req.response = '';
+          req._onload();
+        }
+      },
+
+      {
+        desc: "200 responses on put discard body and content-type, but return the revision",
+        run: function(env, test) {
+          env.connectedClient.put('/foo/bar', { ifMatch: 'foo' }, 'content body').
+            then(function(status, body, contentType, revision) {
+              test.assertAnd(status, 200);
+              test.assertTypeAnd(body, 'undefined');
+              test.assertTypeAnd(contentType, 'undefined');
+              test.assertAnd(revision, '"foo"', 'expected revision to be "foo" but was' + revision);
+              test.done();
+            });
+          var req = XMLHttpRequest.instances.shift();
+          req._responseHeaders['ETag'] = '"foo"';
+          req.status = 200;
+          req.response = '';
+          req._onload();
+        }
+      },
+
+      {
+        desc: "WireClient sets and removes eventlisteners",
+        run: function(env, test) {
+          function allHandlers() {
+            var handlers = rs._handlers;
+            var l = 0;
+            for (var k in handlers) {
+              l += handlers[k].length;
+            }
+            return l;
+          }
+          var rs = new RemoteStorage();
+          RemoteStorage.eventHandling(rs, 'error');
+          test.assertAnd(allHandlers(), 0, "before init found "+allHandlers()+" handlers") ;
+
+          RemoteStorage.WireClient._rs_init(rs);
+          test.assertAnd(allHandlers(), 1, "after init found "+allHandlers()+" handlers") ;
+
+          RemoteStorage.WireClient._rs_cleanup(rs);
+          test.assertAnd(allHandlers(), 0, "after cleanup found "+allHandlers()+" handlers") ;
+
+          test.done();
+        }
+      }
     ]
   });
 

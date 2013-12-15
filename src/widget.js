@@ -1,19 +1,21 @@
 (function(window) {
 
-  var haveLocalStorage;
+  var hasLocalStorage;
   var LS_STATE_KEY = "remotestorage:widget:state";
   // states allowed to immediately jump into after a reload.
   var VALID_ENTRY_STATES = {
-    initial: true, connected: true, offline: true
+    initial: true,
+    connected: true,
+    offline: true
   };
 
   function stateSetter(widget, state) {
     return function() {
-      if(haveLocalStorage) {
+      if (hasLocalStorage) {
         localStorage[LS_STATE_KEY] = state;
       }
-      if(widget.view) {
-        if(widget.rs.remote) {
+      if (widget.view) {
+        if (widget.rs.remote) {
           widget.view.setUserAddress(widget.rs.remote.userAddress);
         }
         widget.view.setState(state, arguments);
@@ -22,27 +24,29 @@
       }
     };
   }
+
   function errorsHandler(widget){
     //decided to not store error state
     return function(error){
-      if(error instanceof RemoteStorage.DiscoveryError) {
+      if (error instanceof RemoteStorage.DiscoveryError) {
         console.error('discovery failed',  error, '"' + error.message + '"');
         widget.view.setState('initial', [error.message]);
-      } else if(error instanceof RemoteStorage.SyncError) {
+      } else if (error instanceof RemoteStorage.SyncError) {
         widget.view.setState('offline', []);
-      } else if(error instanceof RemoteStorage.Unauthorized){
-        widget.view.setState('unauthorized')
+      } else if (error instanceof RemoteStorage.Unauthorized){
+        widget.view.setState('unauthorized');
       } else {
         widget.view.setState('error', [error]);
       }
-    }
+    };
   }
+
   /**
    * Class: RemoteStorage.Widget
-   *   the Widget Controler that comunicates with the view 
-   *   and listens to it's remoteStorage instance
+   *   the Widget Controler that comunicates with the view
+   *   and listens to its remoteStorage instance
    *
-   *   While listening to the Events emitted by it's remoteStorage
+   *   While listening to the Events emitted by its remoteStorage
    *   it set's corresponding states of the View.
    *
    *   ready        :  connected
@@ -65,12 +69,12 @@
     this.rs.on('sync-busy', stateSetter(this, 'busy'));
     this.rs.on('sync-done', stateSetter(this, 'connected'));
     this.rs.on('error', errorsHandler(this) );
-    if(haveLocalStorage) {
+    if (hasLocalStorage) {
       var state = localStorage[LS_STATE_KEY];
-      if(state && VALID_ENTRY_STATES[state]) {
+      if (state && VALID_ENTRY_STATES[state]) {
         this._rememberedState = state;
 
-        if(state == 'connected' && ! remoteStorage.connected) {
+        if (state === 'connected' && ! remoteStorage.connected) {
           this._rememberedState = 'initial';
         }
       }
@@ -85,13 +89,13 @@
     *     returns: this
     **/
     display: function(domID) {
-      if(! this.view) {
+      if (! this.view) {
         this.setView(new RemoteStorage.Widget.View(this.rs));
       }
       this.view.display.apply(this.view, arguments);
       return this;
     },
-    
+
     /**
     *   Method: setView(view)
     *    sets the view and initializes event listeners to
@@ -100,7 +104,7 @@
     setView: function(view) {
       this.view = view;
       this.view.on('connect', function(options) {
-        if(typeof(options) == 'string') {
+        if(typeof(options) === 'string') {
           // options is simply a useraddress
           this.rs.connect(options);
         } else if(options.special) {
@@ -113,8 +117,9 @@
       }
       try {
         this.view.on('reset', function(){
-          this.rs.on('disconnected', document.location.reload.bind(document.location))
-          this.rs.disconnect()
+          var location = RemoteStorage.Authorize.getLocation();
+          this.rs.on('disconnected', location.reload.bind(location));
+          this.rs.disconnect();
         }.bind(this));
       } catch(e) {
         if(e.message && e.message.match(/Unknown event/)) {
@@ -139,14 +144,14 @@
   };
 
   RemoteStorage.Widget._rs_init = function(remoteStorage) {
+    hasLocalStorage = remoteStorage.localStorageAvailable();
     if(! remoteStorage.widget) {
       remoteStorage.widget = new RemoteStorage.Widget(remoteStorage);
     }
   };
 
   RemoteStorage.Widget._rs_supported = function(remoteStorage) {
-    haveLocalStorage = 'localStorage' in window;
-    return typeof(document) != 'undefined';
+    return typeof(document) !== 'undefined';
   };
 
 })(typeof(window) !== 'undefined' ? window : global);

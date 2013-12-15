@@ -31,9 +31,9 @@
    *       They have "oldValue" and "newValue" properties, which can be used to
    *       distinguish create/update/delete operations and analyze changes in
    *       change handlers. In addition they carry a "origin" property, which
-   *       is either "window" or "remote". "remote" events are fired whenever the
-   *       "incoming" flag is passed to #put() or #delete(). This is usually done
-   *       by RemoteStorage.Sync.
+   *       is either "window", "local", or "remote". "remote" events are fired
+   *       whenever the "incoming" flag is passed to #put() or #delete(). This
+   *       is usually done by RemoteStorage.Sync.
    *
    *   The revision interface (also on RemoteStorage.IndexedDB object):
    *     - #setRevision(path, revision) sets the current revision for the given
@@ -129,15 +129,13 @@
   RS.IndexedDB = function(database) {
     this.db = database || DEFAULT_DB;
     if (! this.db) {
-      if (RemoteStorage.LocalStorage) {
-        RemoteStorage.log("Failed to open indexedDB, falling back to localStorage");
-        return new RemoteStorage.LocalStorage();
-      } else {
-        throw "Failed to open indexedDB and localStorage fallback not available!";
-      }
+      RemoteStorage.log("Failed to open indexedDB");
+      return undefined;
     }
+    RS.cachingLayer(this);
     RS.eventHandling(this, 'change', 'conflict');
   };
+
   RS.IndexedDB.prototype = {
 
     get: function(path) {
@@ -146,9 +144,11 @@
       var nodes = transaction.objectStore('nodes');
       var nodeReq = nodes.get(path);
       var node;
+
       nodeReq.onsuccess = function() {
         node = nodeReq.result;
       };
+
       transaction.oncomplete = function() {
         if (node) {
           promise.fulfill(200, node.body, node.contentType, node.revision);
@@ -156,6 +156,7 @@
           promise.fulfill(404);
         }
       };
+
       transaction.onerror = transaction.onabort = promise.reject;
       return promise;
     },
@@ -167,6 +168,7 @@
       var nodes = transaction.objectStore('nodes');
       var oldNode;
       var done;
+
       nodes.get(path).onsuccess = function(evt) {
         try {
           oldNode = evt.target.result;
@@ -192,6 +194,7 @@
           }
         }
       };
+
       transaction.oncomplete = function() {
         this._emit('change', {
           path: path,
@@ -207,6 +210,7 @@
           promise.fulfill(200);
         }
       }.bind(this);
+
       transaction.onerror = transaction.onabort = promise.reject;
       return promise;
     },
@@ -217,12 +221,14 @@
       var transaction = this.db.transaction(['nodes'], 'readwrite');
       var nodes = transaction.objectStore('nodes');
       var oldNode;
+
       nodes.get(path).onsuccess = function(evt) {
         oldNode = evt.target.result;
         nodes.delete(path).onsuccess = function() {
           removeFromParent(nodes, path, 'body', incoming);
         };
       };
+
       transaction.oncomplete = function() {
         if (oldNode) {
           this._emit('change', {
@@ -237,6 +243,7 @@
         }
         promise.fulfill(200);
       }.bind(this);
+
       transaction.onerror = transaction.onabort = promise.reject;
       return promise;
     },
@@ -248,6 +255,7 @@
     setRevisions: function(revs) {
       var promise = promising();
       var transaction = this.db.transaction(['nodes'], 'readwrite');
+
       revs.forEach(function(rev) {
         var nodes = transaction.objectStore('nodes');
         nodes.get(rev[0]).onsuccess = function(event) {
@@ -258,9 +266,11 @@
           };
         };
       });
+
       transaction.oncomplete = function() {
         promise.fulfill();
       };
+
       transaction.onerror = transaction.onabort = promise.reject;
       return promise;
     },
@@ -269,15 +279,18 @@
       var promise = promising();
       var transaction = this.db.transaction(['nodes'], 'readonly');
       var rev;
+
       transaction.objectStore('nodes').
         get(path).onsuccess = function(evt) {
           if (evt.target.result) {
             rev = evt.target.result.revision;
           }
         };
+
       transaction.oncomplete = function() {
         promise.fulfill(rev);
       };
+
       transaction.onerror = transaction.onabort = promise.reject;
       return promise;
     },
@@ -289,10 +302,12 @@
       var promise = promising();
       var transaction = this.db.transaction(['nodes'], 'readonly');
       var nodes = transaction.objectStore('nodes');
+
       nodes.get(path).onsuccess = function(evt) {
         var node = evt.target.result || {};
         promise.fulfill(200, node.cached, node.contentType, node.revision);
       };
+
       return promise;
     },
 
@@ -319,7 +334,7 @@
           if (path.substr(-1) !== '/') {
             this._emit('change', {
               path: path,
-              origin: 'remote',
+              origin: 'local',
               oldValue: undefined,
               newValue: cursor.value.body
             });
@@ -334,6 +349,7 @@
       var transaction = this.db.transaction(['changes'], 'readwrite');
       var changes = transaction.objectStore('changes');
       var change;
+
       changes.get(path).onsuccess = function(evt) {
         change = evt.target.result || {};
         change.path = path;
@@ -342,6 +358,7 @@
         }
         changes.put(change);
       };
+
       transaction.oncomplete = promise.fulfill;
       transaction.onerror = transaction.onabort = promise.reject;
       return promise;
@@ -352,9 +369,11 @@
       var transaction = this.db.transaction(['changes'], 'readwrite');
       var changes = transaction.objectStore('changes');
       changes.delete(path);
+
       transaction.oncomplete = function() {
         promise.fulfill();
       };
+
       return promise;
     },
 
@@ -365,6 +384,7 @@
         openCursor(IDBKeyRange.lowerBound(path));
       var pl = path.length;
       var changes = [];
+
       cursorReq.onsuccess = function() {
         var cursor = cursorReq.result;
         if (cursor) {
@@ -374,17 +394,16 @@
           }
         }
       };
+
       transaction.oncomplete = function() {
         promise.fulfill(changes);
       };
+
       return promise;
     },
 
     setConflict: function(path, attributes) {
-      var event = { path: path };
-      for(var key in attributes) {
-        event[key] = attributes[key];
-      }
+      var event = this._createConflictEvent(path, attributes);
       this._recordChange(path, { conflict: attributes }).
         then(function() {
           // fire conflict once conflict has been recorded.
@@ -394,14 +413,6 @@
             setTimeout(function() { event.resolve('remote'); }, 0);
           }
         }.bind(this));
-      event.resolve = function(resolution) {
-        if (resolution === 'remote' || resolution === 'local') {
-          attributes.resolution = resolution;
-          this._recordChange(path, { conflict: attributes });
-        } else {
-          throw "Invalid resolution: " + resolution;
-        }
-      }.bind(this);
     },
 
     closeDB: function() {
@@ -411,18 +422,20 @@
   };
 
   var DB_VERSION = 2;
+
   RS.IndexedDB.open = function(name, callback) {
     var timer = setTimeout(function() {
       callback("timeout trying to open db");
     }, 3500);
 
     var dbOpen = indexedDB.open(name, DB_VERSION);
+
     dbOpen.onerror = function() {
-      console.error('opening db failed', dbOpen);
-      alert('remoteStorage not supported (private browsing mode?)');
+      RemoteStorage.log('opening db failed', dbOpen);
       clearTimeout(timer);
       callback(dbOpen.error);
     };
+
     dbOpen.onupgradeneeded = function(event) {
       RemoteStorage.log("[IndexedDB] Upgrade: from ", event.oldVersion, " to ", event.newVersion);
       var db = dbOpen.result;
@@ -433,6 +446,7 @@
       RemoteStorage.log("[IndexedDB] Creating object store: changes");
       db.createObjectStore('changes', { keyPath: 'path' });
     };
+
     dbOpen.onsuccess = function() {
       clearTimeout(timer);
       callback(null, dbOpen.result);
@@ -453,22 +467,15 @@
   RS.IndexedDB._rs_init = function(remoteStorage) {
     var promise = promising();
     RS.IndexedDB.open(DEFAULT_DB_NAME, function(err, db) {
-      if (err) {
-        if (err.name === 'InvalidStateError') {
-          // firefox throws this when trying to open an indexedDB in private browsing mode
-          err = new Error("IndexedDB couldn't be opened.");
-          // instead of a stack trace, display some explaination:
-          err.stack = "If you are using Firefox, please disable\nprivate browsing mode.\n\nOtherwise please report your problem\nusing the link below";
-          remoteStorage._emit('error', err);
-        } else {
-          //FIXME or else what?
-        }
+      if(err) {
+        promise.reject(err);
       } else {
         DEFAULT_DB = db;
         db.onerror = function() { remoteStorage._emit('error', err); };
         promise.fulfill();
       }
     });
+
     return promise;
   };
 

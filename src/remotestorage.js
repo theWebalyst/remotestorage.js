@@ -1,5 +1,13 @@
 (function(global) {
-  function emitUnauthorized(status){
+  function logError(error) {
+    if (typeof(error) === 'string') {
+      console.error(error);
+    } else {
+      console.error(error.message, error.stack);
+    }
+  }
+
+  function emitUnauthorized(status) {
     var args = Array.prototype.slice.call(arguments);
     if (status === 403  || status === 401) {
       this._emit('error', new RemoteStorage.Unauthorized());
@@ -8,7 +16,7 @@
     return p.fulfill.apply(p,args);
   }
 
-  function shareFirst(path){
+  function shareFirst(path) {
     return ( this.backend === 'dropbox' &&
              path.match(/^\/public\/.*[^\/]$/) );
   }
@@ -23,7 +31,7 @@
     },
 
     put: function(path, body, contentType) {
-      if (shareFirst.bind(this)(path)){
+      if (shareFirst.bind(this)(path)) {
         //this.local.put(path, body, contentType);
         return SyncedGetPutDelete._wrapBusyDone.call(this, this.remote.put(path, body, contentType));
       }
@@ -53,8 +61,6 @@
       });
     }
   };
-
-  var haveLocalStorage = 'localStorage' in global;
 
   /**
    * Class: RemoteStorage
@@ -145,7 +151,7 @@
 
     this.apiKeys = {};
 
-    if (haveLocalStorage) {
+    if (this.localStorageAvailable()) {
       try {
         this.apiKeys = JSON.parse(localStorage['remotestorage:api-keys']);
       } catch(exc) {
@@ -178,6 +184,7 @@
     Error.apply(this, arguments);
     this.message = message;
   };
+
   RemoteStorage.DiscoveryError.prototype = Object.create(Error.prototype);
 
   RemoteStorage.Unauthorized = function() { Error.apply(this, arguments); };
@@ -214,15 +221,21 @@
      *
      */
     connect: function(userAddress) {
-      if ( userAddress.indexOf('@') < 0) {
-        this._emit('error', new RemoteStorage.DiscoveryError("user adress doesn't contain an @"));
+      if (userAddress.indexOf('@') < 0) {
+        this._emit('error', new RemoteStorage.DiscoveryError("User adress doesn't contain an @."));
         return;
       }
-      this._emit('connecting');
       this.remote.configure(userAddress);
-      RemoteStorage.Discover(userAddress,function(href, storageApi, authURL){
-        if (!href){
-          this._emit('error', new RemoteStorage.DiscoveryError('failed to contact storage server'));
+      this._emit('connecting');
+
+      var discoveryTimeout = setTimeout(function() {
+        this._emit('error', new RemoteStorage.DiscoveryError("No storage information found at that user address."));
+      }.bind(this), 5000);
+
+      RemoteStorage.Discover(userAddress, function(href, storageApi, authURL) {
+        clearTimeout(discoveryTimeout);
+        if (!href) {
+          this._emit('error', new RemoteStorage.DiscoveryError("Failed to contact storage server."));
           return;
         }
         this._emit('authing');
@@ -252,6 +265,7 @@
         delete: this._pendingGPD('delete')
       });
       var n = this._cleanups.length, i = 0;
+
       var oneDone = function() {
         i++;
         if (i >= n) {
@@ -260,7 +274,8 @@
           this._emit('disconnect');// DEPRECATED?
         }
       }.bind(this);
-      if (n>0) {
+
+      if (n > 0) {
         this._cleanups.forEach(function(cleanup) {
           var cleanupResult = cleanup(this);
           if (typeof(cleanup) === 'object' && typeof(cleanup.then) === 'function') {
@@ -276,7 +291,7 @@
 
     setBackend: function(what) {
       this.backend = what;
-      if (haveLocalStorage) {
+      if (this.localStorageAvailable()) {
         if (what) {
           localStorage['remotestorage:backend'] = what;
         } else {
@@ -355,7 +370,7 @@
       } else {
         delete this.apiKeys[type];
       }
-      if (haveLocalStorage) {
+      if (this.localStorageAvailable()) {
         localStorage['remotestorage:api-keys'] = JSON.stringify(this.apiKeys);
       }
     },
@@ -366,6 +381,7 @@
 
     _init: function() {
       this._loadFeatures(function(features) {
+        var readyFired = false;
         this.log('all features loaded');
         this.local = features.local && new features.local();
         // (this.remote set by WireClient._rs_init
@@ -381,7 +397,10 @@
         if (this.remote) {
           this.remote.on('connected', function() {
             try {
-              this._emit('ready');
+              if(!readyFired) {
+                this._emit('ready');
+                readyFired = true;
+              }
             } catch(e) {
               console.error("'ready' failed: ", e, e.stack);
               this._emit('error', e);
@@ -389,7 +408,10 @@
           }.bind(this));
           if (this.remote.connected) {
             try {
-              this._emit('ready');
+              if(!readyFired) {
+                this._emit('ready');
+                readyFired = true;
+              }
             } catch(e) {
               console.error("'ready' failed: ", e, e.stack);
               this._emit('error', e);
@@ -397,38 +419,35 @@
           }
         }
 
-        var fl = features.length;
-        for(var i=0;i<fl;i++) {
-          var cleanup = features[i].cleanup;
-          if (cleanup) {
-            this._cleanups.push(cleanup);
-          }
-        }
+        this._collectCleanupFunctions();
 
         try {
           this._allLoaded = true;
           this._emit('features-loaded');
         } catch(exc) {
-          console.error("remoteStorage#ready block failed: ");
-          if (typeof(exc) === 'string') {
-            console.error(exc);
-          } else {
-            console.error(exc.message, exc.stack);
-          }
+          logError(exc);
           this._emit('error', exc);
         }
         this._processPending();
-      });
+      }.bind(this));
+    },
+
+    _collectCleanupFunctions: function() {
+      for (var i=0; i < this.features.length; i++) {
+        var cleanup = this.features[i].cleanup;
+        if (typeof(cleanup) === 'function') {
+          this._cleanups.push(cleanup);
+        }
+      }
     },
 
     /**
      ** FEATURE DETECTION
      **/
-
-    _detectFeatures: function() {
-      // determine availability
-      var features = [
+    _loadFeatures: function(callback) {
+      var featureList = [
         'WireClient',
+        'I18n',
         'Dropbox',
         'GoogleDrive',
         'Access',
@@ -438,65 +457,98 @@
         'Widget',
         'IndexedDB',
         'LocalStorage',
+        'InMemoryStorage',
         'Sync',
-        'BaseClient'
-      ].map(function(featureName) {
-        var impl = RemoteStorage[featureName];
-        return {
-          name: featureName,
-          init: (impl && impl._rs_init),
-          supported: impl && (impl._rs_supported ? impl._rs_supported() : true),
-          cleanup: ( impl && impl._rs_cleanup )
-        };
-      }).filter(function(feature) {
-        var supported = !! (feature.init && feature.supported);
-        this.log("[FEATURE " + feature.name + "] " + (supported ? '' : 'not ') + 'supported.');
-        return supported;
-      }.bind(this));
-
-      features.forEach(function(feature) {
-        if (feature.name === 'IndexedDB') {
-          features.local = RemoteStorage.IndexedDB;
-        } else if (feature.name === 'LocalStorage' && ! features.local) {
-          features.local = RemoteStorage.LocalStorage;
-        }
-      });
-      features.caching = !!RemoteStorage.Caching;
-      features.sync = !!RemoteStorage.Sync;
-
-      this.features = features;
-
-      return features;
-    },
-
-    _loadFeatures: function(callback) {
-      var features = this._detectFeatures();
-      var n = features.length, i = 0;
+        'BaseClient',
+        'Env'
+      ];
+      var features = [];
+      var featuresDone = 0;
       var self = this;
-      function featureDoneCb(name) {
+
+      function featureDone() {
+        featuresDone++;
+        if (featuresDone === featureList.length) {
+          setTimeout(function() {
+            features.caching = !!RemoteStorage.Caching;
+            features.sync = !!RemoteStorage.Sync;
+            [
+              'IndexedDB',
+              'LocalStorage',
+              'InMemoryStorage'
+            ].some(function(cachingLayer) {
+              if (features.some(function(feature) { return feature.name === cachingLayer; })) {
+                features.local = RemoteStorage[cachingLayer];
+                return true;
+              }
+            });
+            self.features = features;
+            callback(features);
+          }, 0);
+        }
+      }
+
+      function featureInitializedCb(name) {
         return function() {
-          i++;
-          self.log("[FEATURE " + name + "] initialized. (" + i + "/" + n + ")");
-          if (i === n) {
-            setTimeout(function() {
-              callback.apply(self, [features]);
-            }, 0);
+          self.log("[FEATURE "+name+"] initialized.");
+          features.push( {
+            name : name,
+            init :  RemoteStorage[name]._rs_init,
+            supported : true,
+            cleanup : RemoteStorage[name]._rs_cleanup
+          } );
+          featureDone();
+        };
+      }
+
+      function featureFailedCb(name) {
+        return function(err) {
+          self.log("[FEATURE "+name+"] initialization failed ( "+err+")");
+          featureDone();
+        };
+      }
+
+      function featureSupportedCb(name) {
+        return function(success) {
+          self.log("[FEATURE "+name+"]" + success ? "":" not"+" supported");
+          if(!success) {
+            featureDone();
           }
         };
       }
-      features.forEach(function(feature) {
-        self.log("[FEATURE " + feature.name + "] initializing...");
-        var initResult = feature.init(self);
-        var cb = featureDoneCb(feature.name);
-        if (typeof(initResult) === 'object' && typeof(initResult.then) === 'function') {
-          initResult.then(cb);
+
+      featureList.forEach(function(featureName) {
+        self.log("[FEATURE " + featureName + "] initializing...");
+        var impl = RemoteStorage[featureName];
+        var initializedCb = featureInitializedCb(featureName);
+        var failedCb = featureFailedCb(featureName);
+        var supportedCb = featureSupportedCb(featureName);
+
+        if (impl && (!impl._rs_supported || impl._rs_supported())) {
+          supportedCb(true);
+          var initResult;
+          try {
+            initResult = impl._rs_init(self);
+          } catch(e) {
+            failedCb(e);
+            return;
+          }
+          if (typeof(initResult) === 'object' && typeof(initResult.then) === 'function') {
+            initResult.then(initializedCb, failedCb);
+          } else {
+            initializedCb();
+          }
         } else {
-          cb();
+          supportedCb(false);
         }
       });
-      if (features.length === 0) {
-        self.log("[NO FEATURES DETECTED] done");
-        callback.apply(self, [[]]);
+    },
+
+    localStorageAvailable: function() {
+      try {
+        return !!global.localStorage;
+      } catch(error) {
+        return false;
       }
     },
 
@@ -550,6 +602,7 @@
     _dispatchEvent: function(eventName, event) {
       for(var path in this._pathHandlers[eventName]) {
         var pl = path.length;
+        var self = this;
         this._pathHandlers[eventName][path].forEach(function(handler) {
           if (event.path.substr(0, pl) === path) {
             var ev = {};
@@ -559,10 +612,10 @@
               handler(ev);
             } catch(e) {
               console.error("'change' handler failed: ", e, e.stack);
-              this._emit('error', e);
+              self._emit('error', e);
             }
           }
-        }.bind(this));
+        });
       }
     }
   };

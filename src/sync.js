@@ -1,7 +1,5 @@
 (function(global) {
 
-  var SYNC_INTERVAL = 10000;
-
   //
   // The synchronization algorithm is as follows:
   //
@@ -21,6 +19,8 @@
   // can either happen on the server (through ETag, If-Match, If-None-Match
   // headers), or on the client (through versions specified in the parent listing).
   //
+
+  var syncInterval = 10000;
 
   function isDir(path) {
     return path[path.length - 1] === '/';
@@ -80,16 +80,19 @@
         }
         var n = keys.length, i = 0;
         if (n === 0) { promise.fulfill(); }
+
         function oneDone() {
           i++;
           if (i === n && !failed) { promise.fulfill(); }
         }
+
         function oneFailed(error) {
           if (!failed) {
             failed = true;
             promise.reject(error);
           }
         }
+
         keys.forEach(function(key) {
           promiseDeleteLocal(local, path + key).then(oneDone, oneFailed);
         });
@@ -170,7 +173,7 @@
             if (res) {
               RemoteStorage.log('about to resolve', res);
               // ready to be resolved.
-              change.action = (res === 'remote' ? change.remoteAction : change.localAction);
+              change.action = (res === 'remote' ? change.conflict.remoteAction : change.conflict.localAction);
               change.force = true;
             } else {
               RemoteStorage.log('conflict pending for ', change.path);
@@ -242,12 +245,43 @@
         });
     },
     /**
-     * Methods: syncTree
+     * Method: syncTree
      **/
     syncTree: function(remote, local, path) {
       return synchronize(remote, local, path, {
         data: false
       });
+    }
+  };
+
+  /**
+   * Method: getSyncInterval
+   *
+   * Get the value of the sync interval when application is in the foreground
+   *
+   * Returns a number of milliseconds
+   *
+   */
+  RemoteStorage.prototype.getSyncInterval = function() {
+    return syncInterval;
+  };
+  /**
+   * Method: setSyncInterval
+   *
+   * Set the value of the sync interval when application is in the foreground
+   *
+   * Parameters:
+   *   interval - sync interval in milliseconds
+   *
+   */
+  RemoteStorage.prototype.setSyncInterval = function(interval) {
+    if(typeof(interval) !== 'number') {
+      throw interval + " is not a valid sync interval";
+    }
+    syncInterval = parseInt(interval, 10);
+    if (this._syncTimer) {
+      this.stopSync();
+      this._syncTimer = setTimeout(this.syncCycle.bind(this), interval);
     }
   };
 
@@ -316,12 +350,12 @@
   RemoteStorage.prototype.syncCycle = function() {
     this.sync().then(function() {
       this.stopSync();
-      this._syncTimer = setTimeout(this.syncCycle.bind(this), SYNC_INTERVAL);
+      this._syncTimer = setTimeout(this.syncCycle.bind(this), this.getSyncInterval());
     }.bind(this),
     function(e) {
       console.log('sync error, retrying');
       this.stopSync();
-      this._syncTimer = setTimeout(this.syncCycle.bind(this), SYNC_INTERVAL);
+      this._syncTimer = setTimeout(this.syncCycle.bind(this), this.getSyncInterval());
     }.bind(this));
   };
 
@@ -332,14 +366,17 @@
     }
   };
 
+  var syncCycleCb;
   RemoteStorage.Sync._rs_init = function(remoteStorage) {
-    remoteStorage.on('ready', function() {
+    syncCycleCb = function() {
       remoteStorage.syncCycle();
-    });
+    };
+    remoteStorage.on('ready', syncCycleCb);
   };
 
   RemoteStorage.Sync._rs_cleanup = function(remoteStorage) {
     remoteStorage.stopSync();
+    remoteStorage.removeEventListener('ready', syncCycleCb);
   };
 
 })(typeof(window) !== 'undefined' ? window : global);

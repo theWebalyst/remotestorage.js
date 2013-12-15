@@ -43,6 +43,7 @@
      * The <RemoteStorage> instance this <BaseClient> operates on.
      */
     this.storage = storage;
+
     /**
      * Property: base
      *
@@ -59,6 +60,7 @@
     } else {
       this.moduleName = 'root';
     }
+
     /**
      * Event: change
      * emitted when a node changes
@@ -67,7 +69,7 @@
      * (start code)
      * {
      *    path: path,
-     *    origin: incoming ? 'remote' : 'window',
+     *    origin: 'window', 'local', or 'remote'
      *    oldValue: oldBody,
      *    newValue: newBody
      *  }
@@ -76,9 +78,9 @@
      * * the path ofcourse is the path of the node that changed
      *
      *
-     * * the origin tells you if it's an change pulled by sync(remote)
-     * or some user action within the app(window)
-     *
+     * * the origin tells you if it's a change pulled by sync(remote)
+     * or some user action within the app(window) or a result of connecting
+     * with the local data store(local).
      *
      *
      * * the oldValue defaults to undefined if you are dealing with some
@@ -143,15 +145,21 @@
      *   path     - The path to query. It MUST end with a forward slash.
      *
      * Returns:
-     *   A promise for an Array of keys, representing child nodes.
-     *   Those keys ending in a forward slash, represent *directory nodes*, all
+     *
+     *   A promise for an object, representing child nodes.
+     *
+     *   Keys ending in a forward slash represent *directory nodes*, while all
      *   other keys represent *data nodes*.
+     *
+     *   For spec versions <= 01, the data node information will contain only
+     *   the item's ETag. For later spec versions, it will also contain the
+     *   content type and -length of the item.
      *
      * Example:
      *   (start code)
      *   client.getListing('').then(function(listing) {
      *     listing.forEach(function(item) {
-     *       console.log('- ' + item);
+     *       console.log(item);
      *     });
      *   });
      *   (end code)
@@ -163,8 +171,17 @@
         throw "Not a directory: " + path;
       }
       return this.storage.get(this.makePath(path)).then(function(status, body) {
-        if (status === 404) { return; }
-        return typeof(body) === 'object' ? Object.keys(body) : undefined;
+        if (status === 404 || typeof(body) !== 'object') { return; }
+
+        if (body['@context'] === 'http://remotestorage.io/spec/folder-description') {
+          return body.items;
+        } else {
+          var listing = {};
+          Object.keys(body).forEach(function(key){
+            listing[key] = {"ETag": body[key]};
+          });
+          return listing;
+        }
       });
     },
 
@@ -384,10 +401,7 @@
           return promising(function(p) { p.reject(validationResult); });
         }
       } catch(exc) {
-        if (exc instanceof RS.BaseClient.Types.SchemaNotFound) {
-          // ignore
-          // FIXME ignore what and why?
-        } else {
+        if (! (exc instanceof RS.BaseClient.Types.SchemaNotFound)) {
           return promising().reject(exc);
         }
       }
@@ -487,8 +501,6 @@
    *   (end code)
    *
    */
-
-
   RS.BaseClient._rs_init = function() {
     RS.prototype.scope = function(path) {
       return new RS.BaseClient(this, path);

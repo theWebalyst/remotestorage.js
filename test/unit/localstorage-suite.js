@@ -25,7 +25,7 @@ define(['requirejs'], function(requirejs) {
     var haveNodes = [];
     var keys = Object.keys(localStorage), kl = keys.length;
     for(var i=0;i<kl;i++) {
-      if(keys[i].substr(0, NODES_PREFIX.length) == NODES_PREFIX) {
+      if (keys[i].substr(0, NODES_PREFIX.length) === NODES_PREFIX) {
         haveNodes.push(keys[i].substr(NODES_PREFIX.length));
       }
     }
@@ -39,10 +39,16 @@ define(['requirejs'], function(requirejs) {
       require('./lib/promising');
       global.RemoteStorage = function() {};
       require('./src/eventhandling');
-      if(global.rs_eventhandling) {
+      if (global.rs_eventhandling) {
         RemoteStorage.eventHandling = global.rs_eventhandling;
       } else {
         global.rs_eventhandling = RemoteStorage.eventHandling;
+      }
+      require('./src/cachinglayer');
+      if(global.rs_cachinglayer) {
+        RemoteStorage.cachingLayer = global.rs_cachinglayer;
+      } else {
+        global.rs_cachinglayer = RemoteStorage.cachingLayer;
       }
       require('./src/localstorage');
       test.done();
@@ -56,12 +62,13 @@ define(['requirejs'], function(requirejs) {
     },
 
     tests: [
-
       {
         desc: "#get loads a node",
         run: function(env, test) {
           global.localStorage[NODES_PREFIX + '/foo'] = JSON.stringify({
-            body: "bar", contentType: "text/plain", revision: "123"
+            body: "bar",
+            contentType: "text/plain",
+            revision: "123"
           });
           env.ls.get('/foo').then(function(status, body, contentType, revision) {
             test.assertAnd(status, 200);
@@ -156,7 +163,6 @@ define(['requirejs'], function(requirejs) {
             assertHaveNodes(test, ['/foo/bar/baz', '/foo/bar/', '/foo/', '/']);
             env.ls.delete('/foo/bar/baz').then(function() {
               assertHaveNodes(test, []);
-
               test.done();
             });
           });
@@ -175,9 +181,7 @@ define(['requirejs'], function(requirejs) {
                   contentType: 'application/json',
                   path: '/foo/'
                 });
-
                 test.done();
-
               });
             });
           });
@@ -196,7 +200,6 @@ define(['requirejs'], function(requirejs) {
           });
         }
       },
-
 
       {
         desc: "#put doesn't record a change for incoming changes",
@@ -224,7 +227,7 @@ define(['requirejs'], function(requirejs) {
       },
 
       {
-        desc: "#delete doesn't record a change for incoming chnages",
+        desc: "#delete doesn't record a change for incoming changes",
         run: function(env, test) {
           env.ls.put('/foo/bla', 'basfd', 'text/plain', true).then(function() {
             env.ls.delete('/foo/bla', true).then(function() {
@@ -246,7 +249,7 @@ define(['requirejs'], function(requirejs) {
               oldValue: undefined,
               newValue: 'basdf'
             });
-          })
+          });
           env.ls.put('/foo/bla', 'basdf', 'text/plain');
         }
       },
@@ -267,19 +270,38 @@ define(['requirejs'], function(requirejs) {
       },
 
       {
+        desc: "fireInitial fires change event with 'local' origin for initial cache content",
+        timeout: 250,
+        run: function(env, test) {
+          env.ls.put('/foo/bla', 'basdf', 'text/plain');
+          env.ls.on('change', function(event) {
+            test.assert(event.origin, 'local');
+          });
+          //the mock is just an in-memory object; need to explicitly set its .length and its .key() function now:
+          localStorage.length = 1;
+          localStorage.key = function(i) {
+            if (i === 0) {
+              return NODES_PREFIX+'/foo/bla';
+            }
+          };
+          env.ls.fireInitial();
+        }
+      },
+
+      {
         desc: "#put attaches the oldValue correctly for updates",
         run: function(env, test) {
           var i = 0;
           env.ls.on('change', function(event) {
             i++;
-            if(i == 1) {
+            if (i === 1) {
               test.assertAnd(event, {
                 path: '/foo/bla',
                 origin: 'remote',
                 oldValue: undefined,
                 newValue: 'basdf'
               });
-            } else if(i == 2) {
+            } else if (i === 2) {
               test.assertAnd(event, {
                 path: '/foo/bla',
                 origin: 'window',
@@ -289,7 +311,6 @@ define(['requirejs'], function(requirejs) {
               setTimeout(function() {
                 test.done();
               }, 0);
-
             } else {
               console.error("UNEXPECTED THIRD CHANGE EVENT");
               test.result(false);
@@ -300,7 +321,6 @@ define(['requirejs'], function(requirejs) {
           });
         }
       }
-
     ]
   });
 

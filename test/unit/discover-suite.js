@@ -1,5 +1,5 @@
 if (typeof define !== 'function') {
-    var define = require('amdefine')(module);
+  var define = require('amdefine')(module);
 }
 define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
   var suites = [];
@@ -10,6 +10,7 @@ define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
     setup: function(env, test) {
       global.RemoteStorage = function() {};
       RemoteStorage.log = function() {};
+      global.RemoteStorage.prototype.localStorageAvailable = function() { return false; };
       require('./src/discover');
 
       test.done();
@@ -22,7 +23,7 @@ define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
         XMLHttpRequest.sendCalls = [];
         XMLHttpRequest.prototype = {
           open: function() {
-           XMLHttpRequest.openCalls.push(Array.prototype.slice.call(arguments));
+            XMLHttpRequest.openCalls.push(Array.prototype.slice.call(arguments));
           },
 
           send: function() {
@@ -42,7 +43,6 @@ define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
     },
 
     tests: [
-
       // these tests MUST be run before any other.
 
       {
@@ -56,7 +56,9 @@ define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
       {
         desc: "it is supported when XMLHttpRequest is defined",
         run: function(env, test) {
-          global.XMLHttpRequest = function() {XMLHttpRequest.instances.push(this)};
+          global.XMLHttpRequest = function() {
+            XMLHttpRequest.instances.push(this);
+          };
           test.assert(RemoteStorage.Discover._rs_supported(), true);
         }
       },
@@ -64,7 +66,8 @@ define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
       {
         desc: "initialization works",
         run: function(env, test) {
-          RemoteStorage.Discover._rs_init();
+          var rs = new RemoteStorage();
+          RemoteStorage.Discover._rs_init(rs);
           test.done();
         }
       },
@@ -72,8 +75,8 @@ define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
       {
         desc: "it tries /.well-known/webfinger",
         run: function(env, test) {
-          RemoteStorage.Discover('nil@heahdk.net', function() {});
-          test.assertAnd(XMLHttpRequest.openCalls.length, 1)
+          RemoteStorage.Discover('nil@heahdk.net', function() {} );
+          test.assertAnd(XMLHttpRequest.openCalls.length, 1);
           test.assertAnd(XMLHttpRequest.openCalls[0][0], 'GET');
           test.assertAnd(XMLHttpRequest.openCalls[0][1], 'https://heahdk.net/.well-known/webfinger?resource=acct%3Anil%40heahdk.net');
           test.assertAnd(XMLHttpRequest.openCalls[0][2], true); // cross-origin
@@ -105,6 +108,20 @@ define(['requirejs', 'fs'], function(requirejs, fs, undefined) {
             ]
           });
           XMLHttpRequest.onloadFunction();
+        }
+      },
+
+      {
+        desc: "if unseccesfully tried to discover a storage, callback is called without an href",
+        run: function(env, test) {
+          RemoteStorage.Discover("foo@bar", function(href) {
+            test.assertType(href, 'undefined');
+          });
+          for(var i = 0; i < 4; i++) {
+            var instance = XMLHttpRequest.instances[i];
+            instance.status = 200;
+            XMLHttpRequest.onloadFunction();
+          }
         }
       }
     ]
