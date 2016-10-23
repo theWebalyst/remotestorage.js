@@ -276,7 +276,6 @@
         } else {
           this.info().then(function (info){
             this.userAddress = info.email;
-            this.rs.widget.view.setUserAddress(this.userAddress);
             this._emit('connected');
             writeSettingsToCache.apply(this);
           }.bind(this)).catch(function() {
