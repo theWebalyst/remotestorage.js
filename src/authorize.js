@@ -85,7 +85,6 @@
         })
         .then(null, function(error) {
           console.error(error);
-          remoteStorage.widget.view.setState('initial');
         });
     }
 
