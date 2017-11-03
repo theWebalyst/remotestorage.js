@@ -19,6 +19,7 @@ const Features = {
       'WireClient': require('./wireclient'),
       'Dropbox': require('./dropbox'),
       'GoogleDrive': require('./googledrive'),
+      'SafeNetwork': require('./safenetwork'),
       'Access': require('./access'),
       'Discover': require('./discover'),
       'Authorize': require('./authorize'),

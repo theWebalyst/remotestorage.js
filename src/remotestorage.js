@@ -3,6 +3,7 @@
 const util = require('./util');
 const Dropbox = require('./dropbox');
 const GoogleDrive = require('./googledrive');
+const SafeNetwork = require('./safenetwork');
 const Discover = require('./discover');
 const BaseClient = require('./baseclient');
 const config = require('./config');
@@ -209,7 +210,7 @@ RemoteStorage.prototype = {
    * @property {object} remote
    *
    * Depending on the chosen backend, this is either an instance of ``WireClient``,
-   * ``Dropbox`` or ``GoogleDrive``.
+   * ``Dropbox``, ``GoogleDrive`` or ``SafeNetwork``.
    *
    * @property {boolean} remote.connected - Whether or not a remote store is connected
    * @property {boolean} remote.online - Whether last sync action was successful or not
@@ -427,12 +428,14 @@ RemoteStorage.prototype = {
   /**
    * Set the OAuth key/ID for either GoogleDrive or Dropbox backend support.
    *
+   * SafeNetwork config uses the same method but its auth is handled differently
+   *
    * @param {Object} apiKeys - A config object with these properties:
    * @param {string} [apiKeys.type] - Backend type: 'googledrive' or 'dropbox'
    * @param {string} [apiKeys.key] - Client ID for GoogleDrive, or app key for Dropbox
    */
   setApiKeys: function (apiKeys) {
-    const validTypes = ['googledrive', 'dropbox'];
+    const validTypes = ['googledrive', 'dropbox', 'safenetwork'];
     if (typeof apiKeys !== 'object' || !Object.keys(apiKeys).every(type => validTypes.includes(type))) {
       console.error('setApiKeys() was called with invalid arguments') ;
       return false;
@@ -455,6 +458,13 @@ RemoteStorage.prototype = {
           if (typeof this.googledrive === 'undefined' ||
             this.googledrive.clientId !== key) {
             GoogleDrive._rs_init(this);
+          }
+          break;
+        case 'safenetwork':
+          this.apiKeys['safenetwork'] = { clientId: key };
+          if (typeof this.safenetwork === 'undefined' ||
+            this.safenetwork.clientId !== key) {
+            SafeNetwork._rs_init(this);
           }
           break;
       }
