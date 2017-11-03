@@ -1,5 +1,6 @@
 const log = require('./log');
 
+// mrhTODO is this relevant to SafeNetwork?
 function shareFirst(path) {
   return ( this.backend === 'dropbox' &&
            path.match(/^\/public\/.*[^\/]$/) );
